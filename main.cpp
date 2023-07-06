@@ -23,9 +23,10 @@ int goo() {
 
 int main() {
 
-    foo();
-    foo();
-    foo();
-    foo();
+    int i = 4;
+    i = i >> 1;
+    cout << i << endl;
+    i = i >> 1;
+    cout << i << endl;
     return 0;
 }

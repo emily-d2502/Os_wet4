@@ -27,17 +27,74 @@ struct MallocMetadata {
 
 // Searches for a free block with at least ‘size’ bytes or allocates
 // (sbrk()) one if none are found
+int _mem_blk_size(int order);
+bool _allocate_first_32_blks();
+MallocMetadata *_pop_back(list *lst);
+void _push_front(list *lst, MallocMetadata *blk);
+void _split_blk(MallocMetadata *blk, int order);
+
 void* smalloc(size_t size) {
     if (size == 0 || size > 1e8) {
         return nullptr;
     }
+    static bool called = _allocate_first_32_blks();
+    // find first list that contains a large enough block
+    int i;
+    MallocMetadata *blk = nullptr;
+    for (i = 0; i < MAX_ORDER + 1; ++i) {
+        if (free_blks[i] && (_mem_blk_size(i) >= size)) {
+            blk = _pop_back(&free_blks[i]);
+            break;
+        }
+    }
 
-    static int called = _allocate_first_32_blks();
-
-
+    while (blk->size > 2 * size) {
+        _split_blk(blk, i);
+        --i;
+    }
+    blk->is_free = false;
+    blk->next = nullptr;
+    blk->prev = nullptr;
+    return (void *)(blk + 1);
 }
 
-int _allocate_first_32_blks() {
+MallocMetadata *_pop_back(list *lst) {
+    MallocMetadata *ret = *lst;
+    *lst = (*lst)->next;
+    if (*lst) {
+        (*lst)->prev = nullptr;
+    }
+    ret->next = nullptr;
+    return ret;
+}
+
+void _split_blk(MallocMetadata *blk, int order) {
+
+    blk->size = blk->size >> 1;
+    MallocMetadata *buddy_blk = (MallocMetadata *)((intptr_t) blk + blk->size);
+    buddy_blk->size = blk->size;
+    _push_front(&free_blks[order - 1], buddy_blk);
+}
+
+void _push_front(list *lst, MallocMetadata *blk) {
+    MallocMetadata *front = *lst;
+    blk->is_free = true;
+    blk->next = nullptr;
+
+    if (!front) {
+        *lst = blk;
+        blk->prev = nullptr;
+        return;
+    }
+
+    while (front->next) {
+        front = front->next;
+    }
+    front->next = blk;
+    blk->prev = front;
+}
+
+bool _allocate_first_32_blks() {
     intptr_t addr = (intptr_t) sbrk(0);
     int max_size = MEM_BLK_COUNT * MEM_BLK_SIZE(MAX_ORDER);
     int diff = max_size - (addr % max_size);
@@ -59,11 +116,11 @@ int _allocate_first_32_blks() {
     }
     node->next = nullptr;
     free_blks[MAX_ORDER] = (MallocMetadata *) addr;
-    return 1;
+    return true;
 }
 
 int _mem_blk_size(int order) {
-    return (128 << (order));
+    return (128 << (order)) - META_DATA_SIZE();
 }
 
 // Releases the usage of the block that starts with the pointer ‘p’.
@@ -141,3 +198,16 @@ size_t _size_meta_data() {
 
 }
 
+// int main() {
+//     int n = 10;
+//     char *arr = (char *) smalloc(MEM_BLK_SIZE(3) + 10);
+
+//     for (int i = 0; i <= MAX_ORDER; ++i) {
+//         printf("list #%d: ", i);
+//         if (!free_blks[i]) {
+//             printf("empty\n");
+//             continue;
+//         }
+//         printf("not empty\n");
+//     }
+// }
