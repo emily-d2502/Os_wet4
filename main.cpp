@@ -27,7 +27,7 @@ int main() {
     printf("size of blk of order = %d is %lu bytes\n", order, _mem_blk_size(order));
     printf("usable size of blk of order = %d is %lu bytes\n", order, _mem_blk_usable_size(order));
 
-    printf("\nPrinting lists:\n");
+    printf("\nPrinting lists: all empty\n");
     for (int i = 0; i <= MAX_ORDER; ++i) {
         printf("list #%d ", i);
         free_blks[i].print();
@@ -35,14 +35,26 @@ int main() {
 
     char *bytes = (char *) smalloc(_mem_blk_usable_size(9) - 1);
 
-    printf("\nPrinting lists:\n");
+    printf("\nPrinting lists: list 9 should have 1\n");
     for (int i = 0; i <= MAX_ORDER; ++i) {
         printf("list #%d ", i);
         free_blks[i].print();
     }
+
     printf("addr = %lu\n", (intptr_t) bytes);
     printf("addr = %lu\n", (intptr_t)_find_buddy(_mem_blk_meta_data(bytes)));
     printf("addr = %lu\n", (intptr_t)_find_buddy(_find_buddy(_mem_blk_meta_data(bytes))));
+
+    char *byte = (char *) smalloc(_mem_blk_usable_size(9) - 1);
+
+    printf("\nPrinting lists: list 9 should be empty\n");
+    for (int i = 0; i <= MAX_ORDER; ++i) {
+        printf("list #%d ", i);
+        free_blks[i].print();
+    }
+
+
+
 
     sfree(bytes);
     printf("\nPrinting lists:\n");
