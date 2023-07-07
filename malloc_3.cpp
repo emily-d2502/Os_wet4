@@ -132,6 +132,8 @@ MallocMetadata *list::pop_front() {
     front = SECURE_ACCESS(front->prev);
     if (front) {
         front->next = nullptr;
+    } else {
+        back = nullptr;
     }
     ret->prev = nullptr;
     return ret;
