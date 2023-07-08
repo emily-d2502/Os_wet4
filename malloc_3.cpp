@@ -54,20 +54,21 @@ public:
     list();
     bool empty() const;
     void print() const;
-    MallocMetadata *pop_back();
+    // MallocMetadata *pop_back();
     MallocMetadata *pop_front();
     void remove(MallocMetadata *blk);
-    void push_back(MallocMetadata *blk);
+    // void push_back(MallocMetadata *blk);
     void push_front(MallocMetadata *blk);
-
+    size_t size;
 private:
+
     MallocMetadata *back;
     MallocMetadata *front;
 };
 
 // Data structures to maintain free block of memory
 list free_blks[MAX_ORDER + 1];
-list free_blks_mapped;
+list mapped_blks;
 
 // Functions to maintain our data structures
 bool _allocate_first_32_blks();
@@ -77,15 +78,27 @@ MallocMetadata *_find_blk(size_t size);
 MallocMetadata *_find_buddy(MallocMetadata *blk);
 MallocMetadata *_merge_buddy(MallocMetadata *blk);
 
+/* Stats */
+static size_t _num_alloc_blocks = 0;
+static size_t _num_alloc_bytes = 0;
+
 /* Implementation of malloc */
 void *smalloc(size_t size) {
     static bool called = _allocate_first_32_blks();
-    if (size > _mem_blk_size(MAX_ORDER)) {
+    if (size == 0 && called) {
+        return nullptr;
+    }
+    if (size > _mem_blk_usable_size(MAX_ORDER)) {
+        ++_num_alloc_blocks;
+        _num_alloc_bytes += size;
         return _allocate_large_mem(size);
     }
 
     MallocMetadata *blk = SECURE_ACCESS(_find_blk(size));
-    while (_mem_blk_usable_size(blk->order - 1) >= size) {
+    if (!blk) {
+        return nullptr;
+    }
+    while (_mem_blk_usable_size(blk->order - 1) >= size && blk->order >= 1) {
         _split_blk(blk);
     }
 
@@ -97,11 +110,15 @@ void sfree(void *ptr) {
     if (!ptr) {
         return;
     }
-
     MallocMetadata *blk = SECURE_ACCESS(_mem_blk_meta_data(ptr));
     if (blk->size > _mem_blk_size(MAX_ORDER)) {
-        free_blks_mapped.remove(blk);
+        --_num_alloc_blocks;
+        _num_alloc_bytes -= blk->size;
+        mapped_blks.remove(blk);
         munmap(ptr, blk->size);
+        return;
+    }
+    if (blk->is_free) {
         return;
     }
 
@@ -117,6 +134,7 @@ void sfree(void *ptr) {
 
 /* Our data structure and methods for it (implementation) */
 list::list():
+    size(0),
     back(nullptr),
     front(nullptr) {}
 
@@ -130,6 +148,7 @@ MallocMetadata *list::pop_front() {
     }
     MallocMetadata *ret = SECURE_ACCESS(front);
     front = SECURE_ACCESS(front->prev);
+    --size;
     if (front) {
         front->next = nullptr;
     } else {
@@ -141,6 +160,7 @@ MallocMetadata *list::pop_front() {
 
 void list::push_front(MallocMetadata *blk) {
     SECURE_ACCESS(blk);
+    ++size;
     if (empty()) {
         back = blk;
         front = blk;
@@ -154,6 +174,7 @@ void list::push_front(MallocMetadata *blk) {
 
 void list::remove(MallocMetadata *blk) {
     SECURE_ACCESS(blk);
+    --size;
     if (!blk->prev && !blk->next) {
         back = nullptr;
         front = nullptr;
@@ -192,11 +213,16 @@ MallocMetadata *_merge_buddy(MallocMetadata *blk) {
         base = blk;
     }
     ++base->order;
+    blk->size = _mem_blk_size(blk->order);
+    --_num_alloc_blocks;
+    _num_alloc_bytes += sizeof(MallocMetadata);
     return base;
 }
 
 bool _allocate_first_32_blks() {
     _generate_cookie();
+    _num_alloc_blocks = MEM_BLK_COUNT;
+    _num_alloc_bytes = MEM_BLK_COUNT * _mem_blk_usable_size(MAX_ORDER);
     intptr_t addr = (intptr_t)sbrk(0);
     int max_size = MEM_BLK_COUNT * _mem_blk_size(MAX_ORDER);
     int diff = max_size - (addr % max_size);
@@ -217,6 +243,7 @@ bool _allocate_first_32_blks() {
 
 void _split_blk(MallocMetadata *blk) {
     --blk->order;
+    blk->size = _mem_blk_size(blk->order);
     MallocMetadata *buddy = _find_buddy(SECURE_ACCESS(blk));
 
     buddy->is_free = true;
@@ -225,6 +252,8 @@ void _split_blk(MallocMetadata *blk) {
     buddy->size = _mem_blk_size(buddy->order);
 
     free_blks[buddy->order].push_front(buddy);
+    ++_num_alloc_blocks;
+    _num_alloc_bytes -= sizeof(MallocMetadata);
 }
 
 void *_allocate_large_mem(size_t size) {
@@ -237,38 +266,78 @@ void *_allocate_large_mem(size_t size) {
     blk->is_free = false;
     blk->cookie = _cookie;
 
-    free_blks_mapped.push_front(blk);
-    return ret;
+    mapped_blks.push_front(blk);
+    return (void *)(blk + 1);
 }
 
 // Returns the number of allocated blocks in the heap that are currently free.
 size_t _num_free_blocks() {
-
+    size_t ret = 0;
+    for (int i = 0; i <= MAX_ORDER; ++i) {
+        ret += free_blks[i].size;
+    }
+    return ret;
 }
 
 // Returns the number of bytes in all allocated blocks in the heap that are currently free,
 // excluding the bytes used by the meta-data structs
 size_t _num_free_bytes() {
-
+    size_t ret = 0;
+    for (int i = 0; i <= MAX_ORDER; ++i) {
+        ret += free_blks[i].size * _mem_blk_usable_size(i);
+    }
+    return ret;
 }
 
 // Returns the overall (free and used) number of allocated blocks in the heap.
 size_t _num_allocated_blocks() {
-
+    return _num_alloc_blocks;
 }
 
 // Returns the overall number (free and used) of allocated bytes in the heap, excluding
 // the bytes used by the meta-data structs.
 size_t _num_allocated_bytes() {
-
+    return _num_alloc_bytes;
 }
 
 // Returns the overall number of meta-data bytes currently in the heap.
 size_t _num_meta_data_bytes() {
-
+    return _num_alloc_blocks * sizeof(MallocMetadata);
 }
 
 // Returns the number of bytes of a single meta-data structure in your system.
 size_t _size_meta_data() {
+    return sizeof(MallocMetadata);
+}
 
+// Searches for a free block of at least ‘num’ elements, each ‘size’ bytes
+// that are all set to 0 or allocates if none are found. In other words,
+// find/allocate size * num bytes and set all bytes to 0.
+void* scalloc(size_t num, size_t size) {
+    size_t req_size = num * size;
+    void *mem = smalloc(req_size);
+    return memset(mem, 0, req_size);
+}
+
+// If ‘size’ is smaller than or equal to the current block’s size, reuses
+// the same block. Otherwise, finds/allocates ‘size’ bytes for a new space,
+// copies content of oldp into the new allocated space and frees the oldp.
+void* srealloc(void* oldp, size_t size) {
+    if (!oldp) {
+        return smalloc(size);
+    }
+
+    if (size == 0 || size > 1e8) {
+        return nullptr;
+    }
+    MallocMetadata *m_data
+        = (MallocMetadata *)((intptr_t)oldp - sizeof(MallocMetadata));
+    if (size <= m_data->size) {
+        return oldp;
+    }
+
+    void *newp = smalloc(size);
+    memmove(newp, oldp, m_data->size);
+    sfree(oldp);
+    return newp;
 }
