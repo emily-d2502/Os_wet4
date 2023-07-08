@@ -1,5 +1,6 @@
+#include <unistd.h>
+#include <stdint.h>
 #include <cstring>
-#include "malloc_2.h"
 
 #define MAX_ALLOCATION_SIZE (1e8)
 

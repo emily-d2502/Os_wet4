@@ -4,7 +4,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
-#include <iostream>
 
 /* Macros */
 #define MAX_ORDER (10)
@@ -89,8 +88,6 @@ void *smalloc(size_t size) {
         return nullptr;
     }
     if (size > _mem_blk_usable_size(MAX_ORDER)) {
-        ++_num_alloc_blocks;
-        _num_alloc_bytes += size;
         return _allocate_large_mem(size);
     }
 
@@ -125,8 +122,8 @@ void sfree(void *ptr) {
     MallocMetadata *buddy = SECURE_ACCESS(_find_buddy(blk));
     blk->is_free = true;
     while (buddy->is_free && blk->order < MAX_ORDER) {
-        blk = _merge_buddy(blk);
         free_blks[buddy->order].remove(buddy);
+        blk = _merge_buddy(blk);
         buddy = _find_buddy(blk);
     }
     free_blks[blk->order].push_front(blk);
@@ -257,9 +254,15 @@ void _split_blk(MallocMetadata *blk) {
 }
 
 void *_allocate_large_mem(size_t size) {
+
     void* ret = mmap(NULL, size + sizeof(MallocMetadata),
         PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    if (ret == (void *)(-1)) {
+        return nullptr;
+    }
 
+    ++_num_alloc_blocks;
+    _num_alloc_bytes += size;
     MallocMetadata *blk = (MallocMetadata *)ret;
 
     blk->size = size;
@@ -316,6 +319,9 @@ size_t _size_meta_data() {
 void* scalloc(size_t num, size_t size) {
     size_t req_size = num * size;
     void *mem = smalloc(req_size);
+    if (!mem) {
+        return nullptr;
+    }
     return memset(mem, 0, req_size);
 }
 
@@ -326,18 +332,42 @@ void* srealloc(void* oldp, size_t size) {
     if (!oldp) {
         return smalloc(size);
     }
-
-    if (size == 0 || size > 1e8) {
+    if (size == 0) {
         return nullptr;
     }
-    MallocMetadata *m_data
-        = (MallocMetadata *)((intptr_t)oldp - sizeof(MallocMetadata));
-    if (size <= m_data->size) {
+
+    MallocMetadata *blk = SECURE_ACCESS(_mem_blk_meta_data(oldp));
+    if (size <= blk->size) {
         return oldp;
     }
+    if (blk->size > _mem_blk_usable_size(MAX_ORDER)) {
+        void *newp = smalloc(size);
+        memmove(newp, oldp, (blk->size < size) ? blk->size : size);
+        sfree(oldp);
+        return newp;
+    }
 
+    bool merge = false;
+    int order = blk->order;
+    MallocMetadata *buddy = _find_buddy(blk);
+    while (order < MAX_ORDER) {
+        if (buddy->is_free && size <= _mem_blk_usable_size(order)) {
+            merge = true;
+            break;
+        }
+        buddy = (MallocMetadata *)((intptr_t)(blk) xor _mem_blk_size(++order));
+    }
+    if (merge) {
+        buddy = _find_buddy(blk);
+        while (size > _mem_blk_usable_size(blk->order) && buddy->is_free) {
+            free_blks[buddy->order].remove(buddy);
+            blk = _merge_buddy(blk);
+            buddy = _find_buddy(blk);
+        }
+        return (void *)(blk + 1);
+    }
     void *newp = smalloc(size);
-    memmove(newp, oldp, m_data->size);
+    memmove(newp, oldp, (blk->size < size) ? blk->size : size);
     sfree(oldp);
     return newp;
 }
